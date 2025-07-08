@@ -32,17 +32,27 @@ INSTALLED_APPS = [
 CORS_ALLOW_METHODS = ['DELETE', 'GET', 'OPTIONS', 'PATCH', 'POST', 'PUT']
 CORS_EXPOSE_HEADERS = ['Content-Disposition']
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOWED_ORIGINS = ["http://localhost:5173"]
+
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "https://eventra-bd-projects.netlify.app",
+]
+
+
 CORS_ALLOW_HEADERS = list(default_headers) + ["Authorization", "Content-Type"]
-CSRF_TRUSTED_ORIGINS = ["http://localhost:5173"]
+
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5173",
+    "https://eventra-bd-projects.netlify.app",
+]
+
 
 DATA_UPLOAD_MAX_MEMORY_SIZE = 1024 * 1024 * 10
 FILE_UPLOAD_MAX_MEMORY_SIZE = 1024 * 1024 * 10 
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
-    'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware', 
+    'django.middleware.security.SecurityMiddleware', 
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -51,6 +61,9 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'django.middleware.common.BrokenLinkEmailsMiddleware',
     'backend.middleware.CustomErrorMiddleware',
+    
+    # third party
+    'whitenoise.middleware.WhiteNoiseMiddleware',
 ]
 
 ROOT_URLCONF = 'backend.urls'
