@@ -6,7 +6,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from .serializers import EventSerializer, EventCreateSerializer, ReviewSerializer
-from django.db.models import Count,Avg
 from rest_framework import status
 from apps.users.serializers import UserSerializer
 from .models import Event
@@ -17,6 +16,8 @@ from rest_framework.throttling import UserRateThrottle
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q
 from rest_framework.parsers import MultiPartParser, FormParser
+from datetime import timedelta
+from django.db.models import Sum, Avg, Count
 
 
 logger = logging.getLogger(__name__)
@@ -538,7 +539,6 @@ class DashboardView(APIView):
             )
 
         try:
-            # Get all seller's events (changed from first() to support multiple events)
             events = Event.objects.filter(user=request.user)
             
             if not events.exists():
@@ -555,11 +555,46 @@ class DashboardView(APIView):
                     'total_reviews': 0,
                     'average_rating': 0,
                     'total_comments': 0,
-                    'total_events': events.count()
+                    'total_events': events.count(),
+                    'daily_view_count': 0,
+                    'monthly_comments_count': 0
+                },
+                'historical_data': {
+                    'daily_views': [],
+                    'monthly_comments': []
                 }
             }
 
-            # Process each event
+            # Generate historical data (last 30 days)
+            today = timezone.now().date()
+            for i in range(30, -1, -1):
+                date = today - timedelta(days=i)
+                
+                # Calculate daily views across all events
+                daily_views = Event.objects.filter(
+                    user=request.user,
+                    created_at__date__lte=date
+                ).aggregate(views=Sum('view_count'))['views'] or 0
+                
+                # Calculate monthly comments
+                month_start = date.replace(day=1)
+                monthly_comments = Review.objects.filter(
+                    event__user=request.user,
+                    created_at__date__gte=month_start,
+                    created_at__date__lte=date
+                ).exclude(comment__exact='').count()
+                
+                data['historical_data']['daily_views'].append({
+                    'date': date.isoformat(),
+                    'count': daily_views
+                })
+                
+                data['historical_data']['monthly_comments'].append({
+                    'date': date.isoformat(),
+                    'count': monthly_comments
+                })
+
+            # Process each event                    
             for event in events:
                 reviews = event.reviews.all()
                 review_count = reviews.count()
@@ -591,6 +626,11 @@ class DashboardView(APIView):
                 data['aggregated_stats']['total_views'] += event.view_count
                 data['aggregated_stats']['total_reviews'] += review_count
                 data['aggregated_stats']['total_comments'] += comment_count
+                data['aggregated_stats']['daily_view_count'] += event.view_count  
+                
+                month_start = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                monthly_comments = reviews.filter(created_at__gte=month_start).exclude(comment__exact='').count()
+                data['aggregated_stats']['monthly_comments_count'] += monthly_comments
 
             # Calculate overall average rating
             if data['aggregated_stats']['total_reviews'] > 0:
@@ -610,6 +650,7 @@ class DashboardView(APIView):
                 data['aggregated_stats']['rating_distribution'] = {
                     str(item['rating']): item['count'] for item in rating_counts
                 }
+            print(data['aggregated_stats']['daily_view_count'])
 
             return Response(data, status=status.HTTP_200_OK)
 
@@ -619,4 +660,3 @@ class DashboardView(APIView):
                 {"detail": "An error occurred while generating dashboard data."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-        
