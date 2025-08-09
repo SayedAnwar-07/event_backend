@@ -36,6 +36,7 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "https://eventra-bd-projects.netlify.app",
+    "https://eventra-bd.netlify.app",
 ]
 
 
@@ -44,6 +45,7 @@ CORS_ALLOW_HEADERS = list(default_headers) + ["Authorization", "Content-Type"]
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "https://eventra-bd-projects.netlify.app",
+    "https://eventra-bd.netlify.app",
 ]
 
 
