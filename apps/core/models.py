@@ -15,6 +15,17 @@ class Service(models.Model):
 
     def __str__(self):
         return self.get_name_display()
+    
+class EventService(models.Model):  
+    event = models.ForeignKey('Event', on_delete=models.CASCADE)
+    service = models.ForeignKey(Service, on_delete=models.CASCADE)
+    service_short_description = models.TextField(blank=True)
+
+    def __str__(self):
+        return f"{self.event.brand_name} - {self.service.get_name_display()}"
+
+    class Meta:
+        unique_together = ('event', 'service')
 
 
 class Event(models.Model):
@@ -26,7 +37,7 @@ class Event(models.Model):
     logo = models.ImageField(upload_to='uploads/logos', blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    services = models.ManyToManyField(Service, related_name='events')
+    services = models.ManyToManyField(Service, through='EventService', related_name='events')
     view_count = models.PositiveIntegerField(default=0)  
     is_active = models.BooleanField(default=True)  
 

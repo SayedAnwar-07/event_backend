@@ -61,12 +61,13 @@ class EventCreateView(APIView):
                     {"services": "Services must be a list of objects."}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
-
             if not all(isinstance(s, dict) and 'name' in s for s in services_data):
                 return Response(
                     {"services": "Each service must be an object with 'name' field."}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
+            for service in services_data:
+                service['service_short_description'] = service.get('service_short_description', '')
 
         data = {
             'event_title': request.data.get('event_title'),
@@ -77,7 +78,6 @@ class EventCreateView(APIView):
             'services': services_data,
             'gallery_images': request.FILES.getlist('gallery_images', [])
         }
-
         serializer = EventCreateSerializer(data=data, context={'request': request})
 
         if not serializer.is_valid():
@@ -147,6 +147,7 @@ class EventEditView(APIView):
         if event.user != request.user:
             return Response({"detail": "You can only edit your own events."}, status=status.HTTP_403_FORBIDDEN)
         
+        
         # Parse services data
         services_data = []
         if 'services' in request.data and request.data['services']:
@@ -164,6 +165,9 @@ class EventEditView(APIView):
             if not all(isinstance(s, dict) and 'name' in s for s in services_data):
                 return Response({"services": "Each service must have a 'name' field."}, status=status.HTTP_400_BAD_REQUEST)
 
+            for service in services_data:
+                service['service_short_description'] = service.get('service_short_description', '')
+
         # Build data dict for serializer
         data = {
             'event_title': request.data.get('event_title', event.event_title), 
@@ -178,7 +182,6 @@ class EventEditView(APIView):
             # If no logo provided, keep existing
             data['logo'] = event.logo
 
-        # Handle new gallery images uploads (up to 5)
         gallery_images = request.FILES.getlist('gallery_images')
         if gallery_images and len(gallery_images) > 5:
             return Response({"gallery_images": "You can upload a maximum of 5 images."}, status=status.HTTP_400_BAD_REQUEST)
@@ -211,7 +214,11 @@ class EventEditView(APIView):
             response_serializer = EventSerializer(updated_event, context={'request': request})
             return Response(response_serializer.data, status=status.HTTP_200_OK)
         except Exception as e:
-            return Response({"detail": "An error occurred while updating the event."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.error(f"Error updating event: {str(e)}", exc_info=True) 
+            return Response(
+                {"detail": "An error occurred while updating the event.", "error": str(e)}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
                  
 # delete view
 class EventDeleteView(APIView):
@@ -631,6 +638,7 @@ class DashboardView(APIView):
                 month_start = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
                 monthly_comments = reviews.filter(created_at__gte=month_start).exclude(comment__exact='').count()
                 data['aggregated_stats']['monthly_comments_count'] += monthly_comments
+                print("Daily view count",event.view_count )
 
             # Calculate overall average rating
             if data['aggregated_stats']['total_reviews'] > 0:
@@ -650,7 +658,6 @@ class DashboardView(APIView):
                 data['aggregated_stats']['rating_distribution'] = {
                     str(item['rating']): item['count'] for item in rating_counts
                 }
-            print(data['aggregated_stats']['daily_view_count'])
 
             return Response(data, status=status.HTTP_200_OK)
 

@@ -1,7 +1,10 @@
 from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
-from .models import Event, EventGallery, Service, Review
+from .models import Event, EventGallery, Service, Review, EventService
+import json
+import logging
 
+logger = logging.getLogger(__name__)
 
 def create_gallery_images(event, images):
     for image in images:
@@ -96,8 +99,22 @@ class ReviewSerializer(serializers.ModelSerializer):
         return data
 
 
+class EventServiceSerializer(serializers.ModelSerializer):
+    name = serializers.CharField(source='service.name')
+    
+    class Meta:
+        model = EventService
+        fields = ['name', 'service_short_description']
+    
+    def validate_name(self, value):
+        valid_choices = [choice[0] for choice in Service.SERVICE_CHOICES]
+        if value not in valid_choices:
+            raise serializers.ValidationError("Invalid service name.")
+        return value
+
+
 class EventSerializer(serializers.ModelSerializer):
-    services = ServiceSerializer(many=True, required=False)
+    services = EventServiceSerializer(source='eventservice_set', many=True, required=False)
     gallery_images = EventGallerySerializer(many=True, required=False, read_only=True)
     gallery_uploads = serializers.ListField(
         child=serializers.ImageField(),
@@ -150,66 +167,107 @@ class EventSerializer(serializers.ModelSerializer):
         return value
     
     def validate_description(self, value):
-        """Basic validation to prevent XSS (you might want to add more)"""
         if len(value) > 10000:
             raise serializers.ValidationError("Description is too long (max 10000 characters)")
         return value
 
     def create(self, validated_data):
-        services_data = validated_data.pop('services', [])
+        services_data = validated_data.pop('eventservice_set', [])
         gallery_images = validated_data.pop('gallery_uploads', [])
+        
         event = Event.objects.create(**validated_data)
-
+        
+        # Create EventService records with descriptions
         for service_data in services_data:
             try:
-                service = Service.objects.get(name=service_data['name'])
-                event.services.add(service)
+                service = Service.objects.get(name=service_data['service']['name'])
+                EventService.objects.create(
+                    event=event,
+                    service=service,
+                    service_short_description=service_data.get('service_short_description', '')
+                )
             except ObjectDoesNotExist:
-                raise serializers.ValidationError(f"Service '{service_data['name']}' does not exist.")
+                raise serializers.ValidationError(f"Service '{service_data['service']['name']}' does not exist.")
 
         create_gallery_images(event, gallery_images)
         return event
 
     def update(self, instance, validated_data):
-        services_data = validated_data.pop('services', None)
+        services_data = validated_data.pop('eventservice_set', None)
         gallery_images = validated_data.pop('gallery_uploads', [])
         existing_gallery_ids = validated_data.pop('existing_gallery_ids', None)
 
+        # Update basic fields
         for attr, value in validated_data.items():
-            if attr == 'logo' and value is None:
+            if attr == 'logo' and value is None:  # Skip if logo is None (not being updated)
                 continue
             setattr(instance, attr, value)
-        instance.save()
+        
+        try:
+            instance.save()
+        except Exception as e:
+            raise serializers.ValidationError(f"Error saving event: {str(e)}")
 
+        # Handle services update if provided
         if services_data is not None:
-            instance.services.clear()
-            for service_data in services_data:
-                try:
-                    service = Service.objects.get(name=service_data['name'])
-                    instance.services.add(service)
-                except ObjectDoesNotExist:
-                    raise serializers.ValidationError(f"Service '{service_data['name']}' does not exist.")
+            try:
+                # Get existing EventService records
+                existing_services = {es.service.name: es for es in instance.eventservice_set.all()}
+                
+                # Process each service in update data
+                for service_data in services_data:
+                    try:
+                        service_name = service_data['service']['name']
+                        service = Service.objects.get(name=service_name)
+                        
+                        # Update or create EventService record
+                        event_service, created = EventService.objects.get_or_create(
+                            event=instance,
+                            service=service,
+                            defaults={
+                                'service_short_description': service_data.get('service_short_description', '')
+                            }
+                        )
+                        if not created:
+                            event_service.service_short_description = service_data.get('service_short_description', '')
+                            event_service.save()
+                        
+                        # Remove from existing services dict
+                        if service.name in existing_services:
+                            del existing_services[service.name]
+                    
+                    except Service.DoesNotExist:
+                        raise serializers.ValidationError(f"Service '{service_name}' does not exist.")
 
-        if existing_gallery_ids is not None:
-            import json
-            if isinstance(existing_gallery_ids, str):
+                # Delete services that weren't in the update data
+                for remaining_service in existing_services.values():
+                    remaining_service.delete()
+            except Exception as e:
+                raise serializers.ValidationError(f"Error updating services: {str(e)}")
+
+        # Handle gallery images update
+        try:
+            if existing_gallery_ids is not None:
                 try:
-                    existing_ids = json.loads(existing_gallery_ids)
-                except Exception:
+                    existing_ids = json.loads(existing_gallery_ids) if isinstance(existing_gallery_ids, str) else existing_gallery_ids
+                    if not isinstance(existing_ids, list):
+                        existing_ids = []
+                except json.JSONDecodeError:
                     existing_ids = []
-            else:
-                existing_ids = existing_gallery_ids
+                
+                # Delete images not in the keep list
+                instance.gallery_images.exclude(id__in=existing_ids).delete()
+            
+            # Add new images
+            create_gallery_images(instance, gallery_images)
+        except Exception as e:
+            raise serializers.ValidationError(f"Error updating gallery images: {str(e)}")
 
-            instance.gallery_images.exclude(id__in=existing_ids).delete()
-        else:
-            instance.gallery_images.all().delete()
-
-        create_gallery_images(instance, gallery_images)
         return instance
 
 
 class EventCreateSerializer(serializers.ModelSerializer):
-    services = ServiceSerializer(many=True, required=False)
+    services = EventServiceSerializer(many=True, required=False, source='eventservice_set')
     gallery_images = serializers.ListField(
         child=serializers.ImageField(),
         write_only=True,
@@ -220,11 +278,12 @@ class EventCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Event
         fields = [
-            'brand_name','event_title', 'description', 'location', 'logo', 'services', 'gallery_images'
+            'brand_name', 'event_title', 'description', 'location', 'logo', 
+            'services', 'gallery_images'
         ]
 
     def validate(self, data):
-        required_fields = ['event_title','brand_name', 'description', 'location']
+        required_fields = ['event_title', 'brand_name', 'description', 'location']
         for field in required_fields:
             if not data.get(field):
                 raise serializers.ValidationError({field: "This field is required."})
@@ -236,17 +295,21 @@ class EventCreateSerializer(serializers.ModelSerializer):
         return value
 
     def create(self, validated_data):
-        services_data = validated_data.pop('services', [])
+        services_data = validated_data.pop('eventservice_set', [])
         gallery_images = validated_data.pop('gallery_images', [])
 
         event = Event.objects.create(**validated_data)
 
         for service_data in services_data:
             try:
-                service = Service.objects.get(name=service_data['name'])
-                event.services.add(service)
+                service = Service.objects.get(name=service_data['service']['name'])
+                EventService.objects.create(
+                    event=event,
+                    service=service,
+                    service_short_description=service_data.get('service_short_description', '')
+                )
             except ObjectDoesNotExist:
-                raise serializers.ValidationError(f"Service '{service_data['name']}' does not exist.")
+                raise serializers.ValidationError(f"Service '{service_data['service']['name']}' does not exist.")
 
         create_gallery_images(event, gallery_images)
         return event
